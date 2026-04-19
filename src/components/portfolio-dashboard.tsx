@@ -358,12 +358,8 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
 
         {/* ── OVERVIEW ── */}
         {activeTab === "overview" && (() => {
-          const TIMEFRAMES = ["1H","24H","1W","1M","3M","6M","1Y","3Y","MAX"] as const;
+          const TIMEFRAMES = ["3M","6M","1Y","3Y","MAX"] as const;
           const cutoffMs: Record<string, number> = {
-            "1H":  60 * 60 * 1000,
-            "24H": 24 * 60 * 60 * 1000,
-            "1W":  7 * 24 * 60 * 60 * 1000,
-            "1M":  30 * 24 * 60 * 60 * 1000,
             "3M":  90 * 24 * 60 * 60 * 1000,
             "6M":  180 * 24 * 60 * 60 * 1000,
             "1Y":  365 * 24 * 60 * 60 * 1000,
