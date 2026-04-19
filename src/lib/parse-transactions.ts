@@ -38,6 +38,9 @@ const STABLES = new Set(["USDT", "USDC", "xUSD", "USDX", "USD", "GBPX", "GBP"]);
 // Loan currencies (negative balance = outstanding debt)
 const LOAN_CURRENCIES = new Set(["xUSD", "USDX"]);
 
+// Currencies that are fiat wrappers, loan instruments, or internal routing — never shown in holdings
+const HIDDEN_CURRENCIES = new Set(["xUSD", "USDX", "USD", "GBP", "GBPX"]);
+
 function parseUsd(val: string): number {
   if (!val || val === "-") return 0;
   return parseFloat(val.replace(/[$,]/g, "")) || 0;
@@ -161,7 +164,7 @@ export function computeHoldings(transactions: Transaction[]): Holding[] {
   }
 
   return Object.entries(balances)
-    .filter(([, amount]) => Math.abs(amount) > 0.000001)
+    .filter(([currency, amount]) => Math.abs(amount) > 0.000001 && !HIDDEN_CURRENCIES.has(currency))
     .map(([currency, amount]) => ({
       currency,
       amount,

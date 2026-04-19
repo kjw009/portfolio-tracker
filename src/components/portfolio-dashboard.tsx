@@ -129,24 +129,24 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
       change24h: prices[h.currency]?.usd_24h_change ?? 0,
       value: h.amount * (prices[h.currency]?.usd ?? 0),
     }))
+    .filter((h) => Math.abs(h.value) >= 0.5 && !h.isLoan)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
-  const totalValue = holdingsWithValue.filter((h) => !h.isLoan).reduce((s, h) => s + h.value, 0);
-  const totalDebt = holdingsWithValue.filter((h) => h.isLoan).reduce((s, h) => s + Math.abs(h.value), 0);
-  const netValue = totalValue - totalDebt;
+  const totalValue = holdingsWithValue.reduce((s, h) => s + h.value, 0);
+  const netValue = totalValue;
 
   const totalInterestUsd = Object.entries(interestEarned).reduce((sum, [cur, amt]) => {
     return sum + amt * (prices[cur]?.usd ?? 0);
   }, 0);
 
   const weighted24h = holdingsWithValue
-    .filter((h) => !h.isLoan && h.value > 0 && prices[h.currency])
+    .filter((h) => h.value > 0 && prices[h.currency])
     .reduce((sum, h) => sum + (h.change24h * h.value) / Math.max(totalValue, 1), 0);
 
   const loaded = Object.keys(prices).length > 0;
 
   const pieData = holdingsWithValue
-    .filter((h) => !h.isLoan && h.value > 1)
+    .filter((h) => h.value > 1)
     .slice(0, 8)
     .map((h) => ({ name: h.currency, value: h.value }));
 
@@ -273,7 +273,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
         <div className="grid grid-cols-3 gap-px mb-5" style={{ background: "#1A1510" }}>
           {[
             { label: "Holdings", value: loaded ? fmtUsd(totalValue) : "—", color: "#F5ECD0" },
-            { label: "Loan", value: loaded ? fmtUsd(totalDebt) : "—", color: "#F87171" },
+            { label: "Assets", value: loaded ? String(holdingsWithValue.length) : "—", color: "#F0A500" },
             { label: "Yield", value: loaded ? fmtUsd(totalInterestUsd) : "—", color: "#4ADE80" },
           ].map((stat) => (
             <div
@@ -401,7 +401,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
               >
                 Top Holdings
               </div>
-              {holdingsWithValue.filter((h) => !h.isLoan).slice(0, 5).map((h, i) => (
+              {holdingsWithValue.slice(0, 5).map((h, i) => (
                 <div
                   key={h.currency}
                   className="flex items-center justify-between px-4 py-3 border-b last:border-b-0"
@@ -463,7 +463,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
               <div
                 key={h.currency}
                 className="flex items-center justify-between px-4 py-3.5"
-                style={{ background: h.isLoan ? "#130A0A" : "#0A0B0C" }}
+                style={{ background: "#0A0B0C" }}
               >
                 <div className="flex items-center gap-3">
                   <div
@@ -479,15 +479,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-zinc-100">{h.currency}</span>
-                      {h.isLoan && (
-                        <span
-                          className="text-[9px] px-1.5 py-0.5 tracking-widest uppercase"
-                          style={{ background: "#3A0A0A", color: "#F87171", border: "1px solid #5A1010" }}
-                        >
-                          Loan
-                        </span>
-                      )}
-                      {h.isStable && !h.isLoan && (
+                      {h.isStable && (
                         <span
                           className="text-[9px] px-1.5 py-0.5 tracking-widest uppercase"
                           style={{ background: "#0A1A12", color: "#4ADE80", border: "1px solid #1A3020" }}
@@ -508,7 +500,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                   <p
                     className="text-sm font-semibold"
                     style={{
-                      color: h.isLoan ? "#F87171" : "#F5ECD0",
+                      color: "#F5ECD0",
                       fontFamily: "var(--font-mono)",
                     }}
                   >
