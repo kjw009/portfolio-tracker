@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   AreaChart,
   Area,
+  Line,
   PieChart,
   Pie,
   Cell,
@@ -14,6 +15,7 @@ import {
   CartesianGrid,
   BarChart,
   Bar,
+  ComposedChart,
 } from "recharts";
 import type { Holding, Transaction, TimelinePoint } from "@/lib/parse-transactions";
 
@@ -73,14 +75,19 @@ function TypeDot({ type }: { type: string }) {
 // Custom tooltip for area chart
 function TimelineTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
+  const portfolioEntry = payload.find((p) => p.name === "portfolioValue");
+  const investedEntry = payload.find((p) => p.name === "netInvested");
+  const value = portfolioEntry?.value ?? 0;
+  const invested = investedEntry?.value ?? 0;
+  const gain = value - invested;
   return (
-    <div className="bg-[#0F0F11] border border-[#2A2118] px-3 py-2 text-xs font-mono">
+    <div className="bg-[#0F0F11] border border-[#2A2118] px-3 py-2 text-xs font-mono space-y-0.5">
       <p className="text-amber-300 mb-1">{label}</p>
-      {payload.map((p) => (
-        <p key={p.name} className="text-zinc-200">
-          {p.name === "netInvested" ? "Invested" : "Interest"}: {fmtUsd(p.value)}
-        </p>
-      ))}
+      <p className="text-zinc-200">Value: {fmtUsd(value)}</p>
+      <p className="text-zinc-500">Invested: {fmtUsd(invested)}</p>
+      {value > 0 && <p style={{ color: gain >= 0 ? "#4ADE80" : "#F87171" }}>
+        {gain >= 0 ? "+" : ""}{fmtUsd(gain)}
+      </p>}
     </div>
   );
 }
@@ -382,15 +389,11 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                 </div>
               ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={filteredTimeline} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                <ComposedChart data={filteredTimeline} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="gradInvested" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#F0A500" stopOpacity={0.15} />
+                    <linearGradient id="gradPortfolio" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#F0A500" stopOpacity={0.25} />
                       <stop offset="95%" stopColor="#F0A500" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gradInterest" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#4ADE80" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="#4ADE80" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1A1510" vertical={false} />
@@ -410,27 +413,27 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                   <Tooltip content={<TimelineTooltip />} />
                   <Area
                     type="monotone"
-                    dataKey="netInvested"
-                    stackId="1"
+                    dataKey="portfolioValue"
                     stroke="#F0A500"
-                    strokeWidth={1.5}
-                    fill="url(#gradInvested)"
+                    strokeWidth={2}
+                    fill="url(#gradPortfolio)"
+                    dot={false}
                   />
-                  <Area
+                  <Line
                     type="monotone"
-                    dataKey="interestCumulative"
-                    stackId="1"
-                    stroke="#4ADE80"
-                    strokeWidth={1.5}
-                    fill="url(#gradInterest)"
+                    dataKey="netInvested"
+                    stroke="#4A4030"
+                    strokeWidth={1}
+                    strokeDasharray="4 3"
+                    dot={false}
                   />
-                </AreaChart>
+                </ComposedChart>
               </ResponsiveContainer>
               )}
               <div className="flex gap-4 mt-3">
                 {[
-                  { color: "#F0A500", label: "Invested" },
-                  { color: "#4ADE80", label: "Interest" },
+                  { color: "#F0A500", label: "Portfolio Value" },
+                  { color: "#4A4030", label: "Cost Basis" },
                 ].map((l) => (
                   <div key={l.label} className="flex items-center gap-1.5">
                     <div className="w-2 h-px" style={{ background: l.color, height: "2px", width: "12px" }} />

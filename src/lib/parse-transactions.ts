@@ -86,82 +86,64 @@ export function parseTransactions(): Transaction[] {
   return transactions.sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
-export function computeHoldings(transactions: Transaction[]): Holding[] {
-  const balances: Record<string, number> = {};
-
-  const addBalance = (currency: string, amount: number) => {
+function applyTransaction(tx: Transaction, balances: Record<string, number>): void {
+  const add = (currency: string, amount: number) => {
     if (!currency || currency === "-" || amount === 0) return;
     balances[currency] = (balances[currency] || 0) + amount;
   };
 
-  for (const tx of transactions) {
-    if (IGNORE_TYPES.has(tx.type)) continue;
+  if (IGNORE_TYPES.has(tx.type)) return;
 
-    switch (tx.type) {
-      // Earnings: inputAmount is positive for earnings, negative for loan interest charges
-      case "Interest":
-      case "Fixed Term Interest":
-      case "Interest Additional":
-        addBalance(tx.inputCurrency, tx.inputAmount);
-        break;
+  switch (tx.type) {
+    case "Interest":
+    case "Fixed Term Interest":
+    case "Interest Additional":
+      add(tx.inputCurrency, tx.inputAmount);
+      break;
 
-      // External deposits
-      case "Top up Crypto": {
-        // "Credit Granting Top Up" and "Nexo Booster Credit Top Up" are
-        // already counted via the preceding Exchange Credit — skip them
-        const isInternalTopUp =
-          tx.details.includes("Credit Granting Top Up") ||
-          tx.details.includes("Nexo Booster Credit Top Up");
-        if (!isInternalTopUp) {
-          addBalance(tx.outputCurrency, tx.outputAmount);
-        }
-        break;
-      }
-
-      case "Credit Card Withdrawal Credit":
-        addBalance(tx.outputCurrency, tx.outputAmount);
-        break;
-
-      case "Loan Withdrawal":
-        // Booster Loan Withdrawals (USD input) are aggregate records — the XRP
-        // sub-components are already captured by Exchange Booster + any paired
-        // Exchange (e.g. BTC→XRP). Counting the aggregate would double-count.
-        if (tx.inputCurrency !== "USD") {
-          addBalance(tx.outputCurrency, tx.outputAmount);
-        }
-        break;
-
-      // Nexo Booster: only credit the output (XRP received).
-      // The USDT input is synthetic Nexo credit that was never actually held.
-      case "Exchange Booster":
-        addBalance(tx.outputCurrency, tx.outputAmount);
-        break;
-
-      // GBP fiat deposit → creates GBPX credit
-      case "Deposit To Exchange":
-        addBalance(tx.outputCurrency, tx.outputAmount);
-        break;
-
-      // External withdrawals, purchases, deductions, repayments
-      case "Withdrawal":
-      case "Nexo Card Purchase":
-      case "Administrative Deduction":
-      case "Manual Repayment":
-        addBalance(tx.inputCurrency, tx.inputAmount); // negative value
-        break;
-
-      // Currency swaps
-      case "Exchange":
-      case "Exchange Credit":
-      case "Exchange Collateral":
-      case "Exchange Booster":
-      case "Exchange Liquidation":
-      case "Manual Sell Order":
-        addBalance(tx.inputCurrency, tx.inputAmount); // negative (spent)
-        addBalance(tx.outputCurrency, tx.outputAmount); // positive (received)
-        break;
+    case "Top up Crypto": {
+      const isInternal =
+        tx.details.includes("Credit Granting Top Up") ||
+        tx.details.includes("Nexo Booster Credit Top Up");
+      if (!isInternal) add(tx.outputCurrency, tx.outputAmount);
+      break;
     }
+
+    case "Credit Card Withdrawal Credit":
+      add(tx.outputCurrency, tx.outputAmount);
+      break;
+
+    case "Loan Withdrawal":
+      if (tx.inputCurrency !== "USD") add(tx.outputCurrency, tx.outputAmount);
+      break;
+
+    case "Exchange Booster":
+      add(tx.outputCurrency, tx.outputAmount);
+      break;
+
+    case "Deposit To Exchange":
+      add(tx.outputCurrency, tx.outputAmount);
+      break;
+
+    case "Withdrawal":
+    case "Nexo Card Purchase":
+    case "Administrative Deduction":
+      add(tx.inputCurrency, tx.inputAmount);
+      break;
+
+    case "Exchange":
+    case "Exchange Credit":
+    case "Exchange Collateral":
+    case "Manual Sell Order":
+      add(tx.inputCurrency, tx.inputAmount);
+      add(tx.outputCurrency, tx.outputAmount);
+      break;
   }
+}
+
+export function computeHoldings(transactions: Transaction[]): Holding[] {
+  const balances: Record<string, number> = {};
+  for (const tx of transactions) applyTransaction(tx, balances);
 
   return Object.entries(balances)
     .filter(([currency, amount]) => Math.abs(amount) > 0.000001 && !HIDDEN_CURRENCIES.has(currency))
@@ -172,11 +154,52 @@ export function computeHoldings(transactions: Transaction[]): Holding[] {
       isLoan: LOAN_CURRENCIES.has(currency) && amount < 0,
     }))
     .sort((a, b) => {
-      // Loans last, then sort by USD value (set later)
       if (a.isLoan && !b.isLoan) return 1;
       if (!a.isLoan && b.isLoan) return -1;
       return b.amount - a.amount;
     });
+}
+
+export interface MonthlySnapshot {
+  year: number;
+  month: number; // 0-based
+  timestamp: number; // last millisecond of month
+  balances: Record<string, number>;
+}
+
+export function computeMonthlySnapshots(transactions: Transaction[]): MonthlySnapshot[] {
+  if (transactions.length === 0) return [];
+
+  const byMonth: Record<string, Transaction[]> = {};
+  for (const tx of transactions) {
+    const key = `${tx.date.getFullYear()}-${tx.date.getMonth()}`;
+    (byMonth[key] ??= []).push(tx);
+  }
+
+  const first = transactions[0].date;
+  const last = transactions[transactions.length - 1].date;
+  let year = first.getFullYear();
+  let month = first.getMonth();
+  const endYear = last.getFullYear();
+  const endMonth = last.getMonth();
+
+  const balances: Record<string, number> = {};
+  const snapshots: MonthlySnapshot[] = [];
+
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    for (const tx of byMonth[`${year}-${month}`] ?? []) {
+      applyTransaction(tx, balances);
+    }
+    snapshots.push({
+      year,
+      month,
+      timestamp: new Date(year, month + 1, 0).getTime(),
+      balances: { ...balances },
+    });
+    if (++month > 11) { month = 0; year++; }
+  }
+
+  return snapshots;
 }
 
 export interface TimelinePoint {
@@ -185,6 +208,7 @@ export interface TimelinePoint {
   netInvested: number;
   interestCumulative: number;
   totalUsd: number;
+  portfolioValue: number; // actual market value (holdings × historical price)
 }
 
 export function computePortfolioTimeline(transactions: Transaction[]): TimelinePoint[] {
@@ -223,6 +247,7 @@ export function computePortfolioTimeline(transactions: Transaction[]): TimelineP
       netInvested: Math.max(0, cumFlow),
       interestCumulative: cumInterest,
       totalUsd: Math.max(0, cumFlow) + cumInterest,
+      portfolioValue: 0, // filled in by page.tsx after fetching historical prices
     });
   }
 
