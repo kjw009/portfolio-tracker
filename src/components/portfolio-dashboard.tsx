@@ -105,6 +105,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [txPage, setTxPage] = useState(0);
+  const [chartTimeframe, setChartTimeframe] = useState<string>("MAX");
   const TX_PAGE_SIZE = 25;
 
   const fetchPrices = useCallback(async () => {
@@ -320,18 +321,68 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
         </div>
 
         {/* ── OVERVIEW ── */}
-        {activeTab === "overview" && (
+        {activeTab === "overview" && (() => {
+          const TIMEFRAMES = ["1H","24H","1W","1M","3M","6M","1Y","3Y","MAX"] as const;
+          const cutoffMs: Record<string, number> = {
+            "1H":  60 * 60 * 1000,
+            "24H": 24 * 60 * 60 * 1000,
+            "1W":  7 * 24 * 60 * 60 * 1000,
+            "1M":  30 * 24 * 60 * 60 * 1000,
+            "3M":  90 * 24 * 60 * 60 * 1000,
+            "6M":  180 * 24 * 60 * 60 * 1000,
+            "1Y":  365 * 24 * 60 * 60 * 1000,
+            "3Y":  3 * 365 * 24 * 60 * 60 * 1000,
+          };
+          const now = Date.now();
+          const filteredTimeline = chartTimeframe === "MAX"
+            ? timeline
+            : (() => {
+                const cutoff = now - cutoffMs[chartTimeframe];
+                const filtered = timeline.filter((p) => p.timestamp >= cutoff);
+                return filtered.length >= 2 ? filtered : timeline.slice(-Math.max(2, filtered.length));
+              })();
+          const tooShort = filteredTimeline.length < 2;
+
+          return (
           <div className="space-y-4">
             {/* Timeline chart */}
             <div className="border p-4" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
-              <p
-                className="text-[10px] tracking-[0.2em] uppercase mb-4"
-                style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
-              >
-                Portfolio Value Over Time
-              </p>
+              <div className="flex items-center justify-between mb-3">
+                <p
+                  className="text-[10px] tracking-[0.2em] uppercase"
+                  style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+                >
+                  Portfolio Value Over Time
+                </p>
+              </div>
+              {/* Timeframe selector */}
+              <div className="flex gap-px mb-4 overflow-x-auto">
+                {TIMEFRAMES.map((tf) => (
+                  <button
+                    key={tf}
+                    onClick={() => setChartTimeframe(tf)}
+                    className="flex-shrink-0 px-2.5 py-1 text-[9px] tracking-widest uppercase transition-colors"
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      background: chartTimeframe === tf ? "#F0A500" : "#12110E",
+                      color: chartTimeframe === tf ? "#0A0B0C" : "#4A4030",
+                      border: `1px solid ${chartTimeframe === tf ? "#F0A500" : "#1E1A12"}`,
+                    }}
+                  >
+                    {tf}
+                  </button>
+                ))}
+              </div>
+              {tooShort ? (
+                <div
+                  className="flex items-center justify-center h-[200px] text-[10px] tracking-widest uppercase"
+                  style={{ color: "#4A4030", fontFamily: "var(--font-mono)" }}
+                >
+                  No data for this timeframe
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={timeline} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                <AreaChart data={filteredTimeline} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gradInvested" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#F0A500" stopOpacity={0.15} />
@@ -375,6 +426,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                   />
                 </AreaChart>
               </ResponsiveContainer>
+              )}
               <div className="flex gap-4 mt-3">
                 {[
                   { color: "#F0A500", label: "Invested" },
@@ -454,7 +506,8 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
               ))}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ── HOLDINGS ── */}
         {activeTab === "holdings" && (
