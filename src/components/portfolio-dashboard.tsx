@@ -17,19 +17,24 @@ import {
   Bar,
   ComposedChart,
 } from "recharts";
-import type { Holding, Transaction, TimelinePoint, MonthlySnapshot } from "@/lib/parse-transactions";
+import type { Holding, Transaction } from "@/lib/parse-transactions";
 
 interface PriceData {
   usd: number;
   usd_24h_change: number;
 }
 
+interface ChartPoint {
+  date: string;
+  timestamp: number;
+  portfolioValue: number;
+  netInvested: number;
+}
+
 interface Props {
   holdings: Holding[];
   transactions: Transaction[];
   interestEarned: Record<string, number>;
-  timeline: TimelinePoint[];
-  snapshots: MonthlySnapshot[];
 }
 
 const PALETTE = [
@@ -83,7 +88,7 @@ function TimelineTooltip({ active, payload, label }: { active?: boolean; payload
   const gain = value - invested;
   return (
     <div className="bg-[#0F0F11] border border-[#2A2118] px-3 py-2 text-xs font-mono space-y-0.5">
-      <p className="text-amber-300 mb-1">{label}</p>
+      <p className="text-amber-300 mb-1">{label ? new Date(label).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" }) : ""}</p>
       <p className="text-zinc-200">Value: {fmtUsd(value)}</p>
       <p className="text-zinc-500">Invested: {fmtUsd(invested)}</p>
       {value > 0 && <p style={{ color: gain >= 0 ? "#4ADE80" : "#F87171" }}>
@@ -108,16 +113,13 @@ function PriceTooltip({ active, payload }: { active?: boolean; payload?: Array<{
 
 type TabId = "overview" | "holdings" | "allocation" | "interest" | "history";
 
-const HIDDEN = new Set(["xUSD", "USDX", "USD", "GBP", "GBPX"]);
-const STABLE_USD: Record<string, number> = { USDT: 1, USDC: 1 };
-
-export default function PortfolioDashboard({ holdings, transactions, interestEarned, timeline, snapshots }: Props) {
+export default function PortfolioDashboard({ holdings, transactions, interestEarned }: Props) {
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [txPage, setTxPage] = useState(0);
   const [chartTimeframe, setChartTimeframe] = useState<string>("MAX");
-  const [historicalPrices, setHistoricalPrices] = useState<Record<string, Record<string, number>>>({});
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const TX_PAGE_SIZE = 25;
 
   const fetchPrices = useCallback(async () => {
@@ -137,27 +139,10 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
 
   useEffect(() => {
     fetch("/api/historical-prices")
-      .then((r) => r.ok ? r.json() : {})
-      .then(setHistoricalPrices)
+      .then((r) => r.ok ? r.json() : [])
+      .then(setChartData)
       .catch(() => {});
   }, []);
-
-  // Compute portfolio value per month from snapshots + historical prices
-  const snapshotMap = new Map(snapshots.map((s) => [`${s.year}-${s.month}`, s]));
-  const enrichedTimeline: (TimelinePoint & { portfolioValue: number })[] = timeline.map((point) => {
-    const d = new Date(point.timestamp);
-    const key = `${d.getFullYear()}-${d.getMonth()}`;
-    const snap = snapshotMap.get(key);
-    let portfolioValue = 0;
-    if (snap && Object.keys(historicalPrices).length > 0) {
-      for (const [sym, amount] of Object.entries(snap.balances)) {
-        if (HIDDEN.has(sym) || amount <= 0.000001) continue;
-        const price = STABLE_USD[sym] ?? historicalPrices[sym]?.[key] ?? 0;
-        portfolioValue += amount * price;
-      }
-    }
-    return { ...point, portfolioValue: Math.round(portfolioValue) };
-  });
 
   const holdingsWithValue = holdings
     .map((h) => ({
@@ -358,8 +343,9 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
 
         {/* ── OVERVIEW ── */}
         {activeTab === "overview" && (() => {
-          const TIMEFRAMES = ["3M","6M","1Y","3Y","MAX"] as const;
+          const TIMEFRAMES = ["1M","3M","6M","1Y","3Y","MAX"] as const;
           const cutoffMs: Record<string, number> = {
+            "1M":  30 * 24 * 60 * 60 * 1000,
             "3M":  90 * 24 * 60 * 60 * 1000,
             "6M":  180 * 24 * 60 * 60 * 1000,
             "1Y":  365 * 24 * 60 * 60 * 1000,
@@ -367,13 +353,13 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
           };
           const now = Date.now();
           const filteredTimeline = chartTimeframe === "MAX"
-            ? enrichedTimeline
+            ? chartData
             : (() => {
                 const cutoff = now - cutoffMs[chartTimeframe];
-                const filtered = enrichedTimeline.filter((p) => p.timestamp >= cutoff);
-                return filtered.length >= 2 ? filtered : enrichedTimeline.slice(-Math.max(2, filtered.length));
+                const filtered = chartData.filter((p) => p.timestamp >= cutoff);
+                return filtered.length >= 2 ? filtered : chartData.slice(-Math.max(2, filtered.length));
               })();
-          const tooShort = filteredTimeline.length < 2;
+          const tooShort = filteredTimeline.length < 2 || chartData.length === 0;
 
           return (
           <div className="space-y-4">
@@ -410,7 +396,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                   className="flex items-center justify-center h-[200px] text-[10px] tracking-widest uppercase"
                   style={{ color: "#4A4030", fontFamily: "var(--font-mono)" }}
                 >
-                  No data for this timeframe
+                  {chartData.length === 0 ? "Loading…" : "No data for this timeframe"}
                 </div>
               ) : (
               <ResponsiveContainer width="100%" height={200}>

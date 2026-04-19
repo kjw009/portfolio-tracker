@@ -202,6 +202,58 @@ export function computeMonthlySnapshots(transactions: Transaction[]): MonthlySna
   return snapshots;
 }
 
+export interface DailySnapshot {
+  dateStr: string;    // "YYYY-MM-DD" local time
+  timestamp: number;
+  balances: Record<string, number>;
+  netInvested: number; // cumulative deposits − withdrawals in USD
+}
+
+const DEPOSIT_TYPES_SET = new Set(["Top up Crypto", "Deposit To Exchange", "Credit Card Withdrawal Credit"]);
+const WITHDRAWAL_TYPES_SET = new Set(["Withdrawal", "Nexo Card Purchase", "Administrative Deduction"]);
+
+function dateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function computeDailySnapshots(transactions: Transaction[]): DailySnapshot[] {
+  if (transactions.length === 0) return [];
+
+  // Group transactions by local date string
+  const byDate: Record<string, Transaction[]> = {};
+  for (const tx of transactions) {
+    const key = dateStr(tx.date);
+    (byDate[key] ??= []).push(tx);
+  }
+
+  const balances: Record<string, number> = {};
+  let netInvested = 0;
+  const snapshots: DailySnapshot[] = [];
+
+  const first = transactions[0].date;
+  let cur = new Date(first.getFullYear(), first.getMonth(), first.getDate());
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  while (cur <= today) {
+    const key = dateStr(cur);
+    for (const tx of byDate[key] ?? []) {
+      applyTransaction(tx, balances);
+      if (DEPOSIT_TYPES_SET.has(tx.type)) netInvested += tx.usdEquivalent;
+      else if (WITHDRAWAL_TYPES_SET.has(tx.type)) netInvested -= tx.usdEquivalent;
+    }
+    snapshots.push({
+      dateStr: key,
+      timestamp: cur.getTime(),
+      balances: { ...balances },
+      netInvested: Math.max(0, netInvested),
+    });
+    cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+  }
+
+  return snapshots;
+}
+
 export interface TimelinePoint {
   date: string; // "MMM YY"
   timestamp: number;
