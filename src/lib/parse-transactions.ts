@@ -29,6 +29,7 @@ const IGNORE_TYPES = new Set([
   "Exchange Deposited On",   // double-record of Deposit To Exchange
   "Exchange Liquidation",    // always paired with Manual Sell Order (which uses correct negative sign); liquidation has positive input amounts that would incorrectly credit the sold asset
   "Manual Repayment",        // always paired with Exchange Liquidation; the USDX created and immediately used is a zero-sum internal pair
+  "Exchange Booster",        // Nexo Booster product: XRP output is already captured by the paired Loan Withdrawal; USDT input is synthetic (positive amount but a spend), never actually held
 ]);
 
 // Stablecoins / USD-pegged assets
