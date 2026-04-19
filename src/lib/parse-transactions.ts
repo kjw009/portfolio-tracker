@@ -29,7 +29,7 @@ const IGNORE_TYPES = new Set([
   "Exchange Deposited On",   // double-record of Deposit To Exchange
   "Exchange Liquidation",    // always paired with Manual Sell Order (which uses correct negative sign); liquidation has positive input amounts that would incorrectly credit the sold asset
   "Manual Repayment",        // always paired with Exchange Liquidation; the USDX created and immediately used is a zero-sum internal pair
-  "Exchange Booster",        // Nexo Booster product: XRP output is already captured by the paired Loan Withdrawal; USDT input is synthetic (positive amount but a spend), never actually held
+  // Exchange Booster is handled separately below (only credit the output, skip synthetic USDT input)
 ]);
 
 // Stablecoins / USD-pegged assets
@@ -116,7 +116,21 @@ export function computeHoldings(transactions: Transaction[]): Holding[] {
       }
 
       case "Credit Card Withdrawal Credit":
+        addBalance(tx.outputCurrency, tx.outputAmount);
+        break;
+
       case "Loan Withdrawal":
+        // Booster Loan Withdrawals (USD input) are aggregate records — the XRP
+        // sub-components are already captured by Exchange Booster + any paired
+        // Exchange (e.g. BTC→XRP). Counting the aggregate would double-count.
+        if (tx.inputCurrency !== "USD") {
+          addBalance(tx.outputCurrency, tx.outputAmount);
+        }
+        break;
+
+      // Nexo Booster: only credit the output (XRP received).
+      // The USDT input is synthetic Nexo credit that was never actually held.
+      case "Exchange Booster":
         addBalance(tx.outputCurrency, tx.outputAmount);
         break;
 
