@@ -20,13 +20,15 @@ export interface Holding {
   isLoan: boolean;
 }
 
-// Transaction types to completely ignore (internal wallet moves)
+// Transaction types to completely ignore (internal wallet moves or redundant records)
 const IGNORE_TYPES = new Set([
   "Transfer In",
   "Transfer Out",
   "Locking Term Deposit",
   "Unlocking Term Deposit",
-  "Exchange Deposited On", // double-record of Deposit To Exchange
+  "Exchange Deposited On",   // double-record of Deposit To Exchange
+  "Exchange Liquidation",    // always paired with Manual Sell Order (which uses correct negative sign); liquidation has positive input amounts that would incorrectly credit the sold asset
+  "Manual Repayment",        // always paired with Exchange Liquidation; the USDX created and immediately used is a zero-sum internal pair
 ]);
 
 // Stablecoins / USD-pegged assets
@@ -100,7 +102,18 @@ export function computeHoldings(transactions: Transaction[]): Holding[] {
         break;
 
       // External deposits
-      case "Top up Crypto":
+      case "Top up Crypto": {
+        // "Credit Granting Top Up" and "Nexo Booster Credit Top Up" are
+        // already counted via the preceding Exchange Credit — skip them
+        const isInternalTopUp =
+          tx.details.includes("Credit Granting Top Up") ||
+          tx.details.includes("Nexo Booster Credit Top Up");
+        if (!isInternalTopUp) {
+          addBalance(tx.outputCurrency, tx.outputAmount);
+        }
+        break;
+      }
+
       case "Credit Card Withdrawal Credit":
       case "Loan Withdrawal":
         addBalance(tx.outputCurrency, tx.outputAmount);
