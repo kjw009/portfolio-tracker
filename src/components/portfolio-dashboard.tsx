@@ -1,21 +1,21 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  AreaChart,
+  Area,
   PieChart,
   Pie,
   Cell,
   ResponsiveContainer,
   Tooltip,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
+  CartesianGrid,
+  BarChart,
+  Bar,
 } from "recharts";
-import type { Holding, Transaction } from "@/lib/parse-transactions";
+import type { Holding, Transaction, TimelinePoint } from "@/lib/parse-transactions";
 
 interface PriceData {
   usd: number;
@@ -26,53 +26,86 @@ interface Props {
   holdings: Holding[];
   transactions: Transaction[];
   interestEarned: Record<string, number>;
+  timeline: TimelinePoint[];
 }
 
-const COLORS = [
-  "#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd",
-  "#06b6d4", "#0891b2", "#0284c7", "#2563eb",
-  "#10b981", "#059669", "#f59e0b", "#ef4444",
+const PALETTE = [
+  "#F0A500", "#FF6B35", "#E8C547", "#4ECDC4",
+  "#45B7D1", "#96CEB4", "#DDA0DD", "#98D8C8",
 ];
 
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  BTC: "₿", ETH: "Ξ", XRP: "✕", NEXO: "N",
-  USDT: "$", FLR: "🔥", LINK: "⬡", ENJ: "Ω",
-  AXS: "A", GALA: "G", GBPX: "£", xUSD: "$",
+function fmtUsd(n: number, compact = false) {
+  if (compact && Math.abs(n) >= 1000) {
+    return `$${(n / 1000).toFixed(1)}k`;
+  }
+  if (Math.abs(n) >= 10000) {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  }
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+}
+
+function fmtAmount(n: number) {
+  const abs = Math.abs(n);
+  if (abs < 0.0001) return n.toFixed(8);
+  if (abs < 0.01) return n.toFixed(6);
+  if (abs < 1) return n.toFixed(4);
+  if (abs < 10000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+const TX_TYPE_COLORS: Record<string, string> = {
+  Interest: "text-amber-400",
+  "Fixed Term Interest": "text-amber-400",
+  "Interest Additional": "text-amber-400",
+  Exchange: "text-sky-400",
+  "Exchange Credit": "text-sky-400",
+  "Top up Crypto": "text-emerald-400",
+  Withdrawal: "text-red-400",
+  "Loan Withdrawal": "text-orange-400",
+  "Manual Repayment": "text-red-400",
 };
 
-function fmt(n: number, decimals = 2) {
-  return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(n);
+function TypeDot({ type }: { type: string }) {
+  const cls = TX_TYPE_COLORS[type] ?? "text-zinc-500";
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full bg-current ${cls} mr-1.5 flex-shrink-0 mt-[5px]`} />;
 }
 
-function fmtUsd(n: number) {
-  if (Math.abs(n) >= 1000) return `$${fmt(n, 0)}`;
-  return `$${fmt(n, 2)}`;
-}
-
-function fmtAmount(amount: number) {
-  if (Math.abs(amount) < 0.01) return amount.toFixed(6);
-  if (Math.abs(amount) < 1) return amount.toFixed(4);
-  if (Math.abs(amount) < 1000) return fmt(amount, 2);
-  return fmt(amount, 0);
-}
-
-function Change({ pct }: { pct: number }) {
-  const positive = pct >= 0;
+// Custom tooltip for area chart
+function TimelineTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
+  if (!active || !payload?.length) return null;
   return (
-    <span className={positive ? "text-emerald-400" : "text-red-400"}>
-      {positive ? "▲" : "▼"} {Math.abs(pct).toFixed(2)}%
-    </span>
+    <div className="bg-[#0F0F11] border border-[#2A2118] px-3 py-2 text-xs font-mono">
+      <p className="text-amber-300 mb-1">{label}</p>
+      {payload.map((p) => (
+        <p key={p.name} className="text-zinc-200">
+          {p.name === "netInvested" ? "Invested" : "Interest"}: {fmtUsd(p.value)}
+        </p>
+      ))}
+    </div>
   );
 }
 
-export default function PortfolioDashboard({ holdings, transactions, interestEarned }: Props) {
+function PriceTooltip({ active, payload }: { active?: boolean; payload?: Array<{ value: number; name: string }> }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-[#0F0F11] border border-[#2A2118] px-3 py-2 text-xs font-mono">
+      {payload.map((p) => (
+        <p key={p.name} className="text-zinc-200">
+          {fmtUsd(p.value)}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+type TabId = "overview" | "holdings" | "allocation" | "interest" | "history";
+
+export default function PortfolioDashboard({ holdings, transactions, interestEarned, timeline }: Props) {
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [txPage, setTxPage] = useState(0);
-  const TX_PAGE_SIZE = 20;
+  const TX_PAGE_SIZE = 25;
 
   const fetchPrices = useCallback(async () => {
     const currencies = [...new Set(holdings.map((h) => h.currency))].join(",");
@@ -89,7 +122,6 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
     return () => clearInterval(interval);
   }, [fetchPrices]);
 
-  // Compute values
   const holdingsWithValue = holdings
     .map((h) => ({
       ...h,
@@ -99,36 +131,27 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
     }))
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
-  const totalValue = holdingsWithValue
-    .filter((h) => !h.isLoan)
-    .reduce((s, h) => s + h.value, 0);
-
-  const totalDebt = holdingsWithValue
-    .filter((h) => h.isLoan)
-    .reduce((s, h) => s + Math.abs(h.value), 0);
-
+  const totalValue = holdingsWithValue.filter((h) => !h.isLoan).reduce((s, h) => s + h.value, 0);
+  const totalDebt = holdingsWithValue.filter((h) => h.isLoan).reduce((s, h) => s + Math.abs(h.value), 0);
   const netValue = totalValue - totalDebt;
 
   const totalInterestUsd = Object.entries(interestEarned).reduce((sum, [cur, amt]) => {
     return sum + amt * (prices[cur]?.usd ?? 0);
   }, 0);
 
-  const weighted24hChange = holdingsWithValue
+  const weighted24h = holdingsWithValue
     .filter((h) => !h.isLoan && h.value > 0 && prices[h.currency])
-    .reduce((sum, h) => sum + (h.change24h * h.value) / totalValue, 0);
+    .reduce((sum, h) => sum + (h.change24h * h.value) / Math.max(totalValue, 1), 0);
 
-  // Pie chart data (top assets by value)
+  const loaded = Object.keys(prices).length > 0;
+
   const pieData = holdingsWithValue
     .filter((h) => !h.isLoan && h.value > 1)
     .slice(0, 8)
     .map((h) => ({ name: h.currency, value: h.value }));
 
-  // Interest bar chart (top earners by current value)
   const interestChartData = Object.entries(interestEarned)
-    .map(([cur, amt]) => ({
-      currency: cur,
-      usdValue: amt * (prices[cur]?.usd ?? 0),
-    }))
+    .map(([cur, amt]) => ({ currency: cur, usdValue: amt * (prices[cur]?.usd ?? 0) }))
     .filter((d) => d.usdValue > 0.01)
     .sort((a, b) => b.usdValue - a.usdValue)
     .slice(0, 8);
@@ -137,307 +160,594 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
   const pageTx = sortedTx.slice(txPage * TX_PAGE_SIZE, (txPage + 1) * TX_PAGE_SIZE);
   const totalPages = Math.ceil(transactions.length / TX_PAGE_SIZE);
 
-  const loaded = Object.keys(prices).length > 0;
+  const TABS: { id: TabId; label: string }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "holdings", label: "Holdings" },
+    { id: "allocation", label: "Alloc" },
+    { id: "interest", label: "Yield" },
+    { id: "history", label: "History" },
+  ];
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 pb-8">
+    <div
+      className="min-h-screen pb-10"
+      style={{
+        background: "#08090A",
+        fontFamily: "var(--font-syne), sans-serif",
+      }}
+    >
+      {/* Subtle grid background */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(240,165,0,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(240,165,0,0.03) 1px, transparent 1px)
+          `,
+          backgroundSize: "40px 40px",
+        }}
+      />
+
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-gray-950/90 backdrop-blur border-b border-gray-800 px-4 py-3">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">Portfolio</h1>
-            {lastUpdated && (
-              <p className="text-xs text-gray-500">
-                Updated {lastUpdated.toLocaleTimeString()}
-              </p>
-            )}
+      <header
+        className="sticky top-0 z-20 border-b"
+        style={{
+          background: "rgba(8,9,10,0.92)",
+          backdropFilter: "blur(12px)",
+          borderColor: "#1E1A12",
+        }}
+      >
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-7 h-7 flex items-center justify-center text-xs font-bold"
+              style={{
+                background: "linear-gradient(135deg, #F0A500, #FF6B35)",
+                color: "#000",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              ₿
+            </div>
+            <div>
+              <h1 className="text-sm font-bold tracking-widest uppercase text-zinc-100">
+                Portfolio
+              </h1>
+              {lastUpdated && (
+                <p
+                  className="text-[10px] tracking-widest uppercase"
+                  style={{ color: "#5A5040", fontFamily: "var(--font-mono)" }}
+                >
+                  {lastUpdated.toLocaleTimeString("en-US", { hour12: false })}
+                </p>
+              )}
+            </div>
           </div>
           <button
             onClick={fetchPrices}
-            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            className="text-xs tracking-widest uppercase transition-colors"
+            style={{ color: "#8A7040", fontFamily: "var(--font-mono)" }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#F0A500")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#8A7040")}
           >
-            Refresh ↻
+            ↻ Refresh
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="max-w-2xl mx-auto px-4 pt-4 space-y-4">
-        {/* Summary Cards */}
-        <div className="grid grid-cols-2 gap-3">
-          <Card className="bg-gray-900 border-gray-800 col-span-2">
-            <CardContent className="pt-4 pb-4">
-              <p className="text-xs text-gray-400 mb-1">Net Portfolio Value</p>
-              <p className="text-3xl font-bold tracking-tight">
-                {loaded ? fmtUsd(netValue) : "—"}
-              </p>
-              {loaded && (
-                <p className="text-sm mt-1">
-                  <Change pct={weighted24hChange} />
-                  <span className="text-gray-500 ml-2">24h</span>
-                </p>
-              )}
-            </CardContent>
-          </Card>
+      <div className="max-w-2xl mx-auto px-4 pt-5 relative z-10">
 
-          <Card className="bg-gray-900 border-gray-800">
-            <CardContent className="pt-4 pb-4">
-              <p className="text-xs text-gray-400 mb-1">Holdings</p>
-              <p className="text-xl font-semibold">{loaded ? fmtUsd(totalValue) : "—"}</p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800">
-            <CardContent className="pt-4 pb-4">
-              <p className="text-xs text-gray-400 mb-1">Loan Outstanding</p>
-              <p className="text-xl font-semibold text-red-400">
-                {loaded ? fmtUsd(totalDebt) : "—"}
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-gray-900 border-gray-800 col-span-2">
-            <CardContent className="pt-4 pb-4">
-              <p className="text-xs text-gray-400 mb-1">Interest Earned (current price)</p>
-              <p className="text-xl font-semibold text-emerald-400">
-                {loaded ? fmtUsd(totalInterestUsd) : "—"}
-              </p>
-            </CardContent>
-          </Card>
+        {/* Hero value block */}
+        <div
+          className="mb-5 p-5 border-l-2 border-t"
+          style={{ borderColor: "#F0A500", borderTopColor: "#2A2118", background: "rgba(240,165,0,0.03)" }}
+        >
+          <p
+            className="text-[10px] tracking-[0.2em] uppercase mb-2"
+            style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+          >
+            Net Portfolio Value
+          </p>
+          <p
+            className="text-4xl font-bold tracking-tight mb-1"
+            style={{
+              color: "#F5ECD0",
+              fontFamily: "var(--font-mono)",
+              textShadow: loaded ? "0 0 40px rgba(240,165,0,0.15)" : "none",
+            }}
+          >
+            {loaded ? fmtUsd(netValue) : "———"}
+          </p>
+          {loaded && (
+            <p
+              className="text-sm"
+              style={{ fontFamily: "var(--font-mono)", color: weighted24h >= 0 ? "#4ADE80" : "#F87171" }}
+            >
+              {weighted24h >= 0 ? "▲" : "▼"} {Math.abs(weighted24h).toFixed(2)}%
+              <span style={{ color: "#4A4030" }} className="ml-2 text-xs">24h weighted</span>
+            </p>
+          )}
         </div>
 
-        {/* Tabs */}
-        <Tabs defaultValue="holdings">
-          <TabsList className="w-full bg-gray-900 border border-gray-800">
-            <TabsTrigger value="holdings" className="flex-1 data-[state=active]:bg-gray-800">
-              Holdings
-            </TabsTrigger>
-            <TabsTrigger value="chart" className="flex-1 data-[state=active]:bg-gray-800">
-              Allocation
-            </TabsTrigger>
-            <TabsTrigger value="interest" className="flex-1 data-[state=active]:bg-gray-800">
-              Interest
-            </TabsTrigger>
-            <TabsTrigger value="history" className="flex-1 data-[state=active]:bg-gray-800">
-              History
-            </TabsTrigger>
-          </TabsList>
-
-          {/* Holdings Tab */}
-          <TabsContent value="holdings" className="space-y-2 mt-3">
-            {holdingsWithValue.map((h, i) => (
-              <Card
-                key={h.currency}
-                className={`border-gray-800 ${h.isLoan ? "bg-red-950/30" : "bg-gray-900"}`}
+        {/* Stat strip */}
+        <div className="grid grid-cols-3 gap-px mb-5" style={{ background: "#1A1510" }}>
+          {[
+            { label: "Holdings", value: loaded ? fmtUsd(totalValue) : "—", color: "#F5ECD0" },
+            { label: "Loan", value: loaded ? fmtUsd(totalDebt) : "—", color: "#F87171" },
+            { label: "Yield", value: loaded ? fmtUsd(totalInterestUsd) : "—", color: "#4ADE80" },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="px-3 py-3"
+              style={{ background: "#0A0B0C" }}
+            >
+              <p
+                className="text-[9px] tracking-[0.18em] uppercase mb-1"
+                style={{ color: "#4A4030", fontFamily: "var(--font-mono)" }}
               >
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-                        style={{ backgroundColor: COLORS[i % COLORS.length] + "33", color: COLORS[i % COLORS.length] }}
-                      >
-                        {CURRENCY_SYMBOLS[h.currency] || h.currency.slice(0, 2)}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold">{h.currency}</span>
-                          {h.isLoan && <Badge variant="destructive" className="text-xs py-0">Loan</Badge>}
-                          {h.isStable && !h.isLoan && <Badge variant="secondary" className="text-xs py-0">Stable</Badge>}
-                        </div>
-                        <p className="text-xs text-gray-400">
-                          {fmtAmount(Math.abs(h.amount))} @ {prices[h.currency] ? fmtUsd(h.price) : "…"}
-                        </p>
-                      </div>
+                {stat.label}
+              </p>
+              <p
+                className="text-sm font-semibold truncate"
+                style={{ color: stat.color, fontFamily: "var(--font-mono)" }}
+              >
+                {stat.value}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        {/* Tab nav */}
+        <div
+          className="flex border-b mb-5 gap-0"
+          style={{ borderColor: "#1A1510" }}
+        >
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="px-3 py-2 text-xs tracking-widest uppercase transition-all relative"
+              style={{
+                fontFamily: "var(--font-mono)",
+                color: activeTab === tab.id ? "#F0A500" : "#4A4030",
+                borderBottom: activeTab === tab.id ? "2px solid #F0A500" : "2px solid transparent",
+                marginBottom: "-1px",
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── OVERVIEW ── */}
+        {activeTab === "overview" && (
+          <div className="space-y-4">
+            {/* Timeline chart */}
+            <div className="border p-4" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              <p
+                className="text-[10px] tracking-[0.2em] uppercase mb-4"
+                style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+              >
+                Portfolio Value Over Time
+              </p>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={timeline} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="gradInvested" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#F0A500" stopOpacity={0.15} />
+                      <stop offset="95%" stopColor="#F0A500" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradInterest" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#4ADE80" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#4ADE80" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1A1510" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: "#4A4030", fontSize: 9, fontFamily: "var(--font-mono)" }}
+                    tickLine={false}
+                    axisLine={{ stroke: "#1A1510" }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: "#4A4030", fontSize: 9, fontFamily: "var(--font-mono)" }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => fmtUsd(v, true)}
+                  />
+                  <Tooltip content={<TimelineTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="netInvested"
+                    stackId="1"
+                    stroke="#F0A500"
+                    strokeWidth={1.5}
+                    fill="url(#gradInvested)"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="interestCumulative"
+                    stackId="1"
+                    stroke="#4ADE80"
+                    strokeWidth={1.5}
+                    fill="url(#gradInterest)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 mt-3">
+                {[
+                  { color: "#F0A500", label: "Invested" },
+                  { color: "#4ADE80", label: "Interest" },
+                ].map((l) => (
+                  <div key={l.label} className="flex items-center gap-1.5">
+                    <div className="w-2 h-px" style={{ background: l.color, height: "2px", width: "12px" }} />
+                    <span
+                      className="text-[10px] tracking-widest uppercase"
+                      style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+                    >
+                      {l.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Top holdings preview */}
+            <div className="border" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              <div
+                className="px-4 py-2 border-b text-[10px] tracking-[0.2em] uppercase"
+                style={{ borderColor: "#1E1A12", color: "#6A5830", fontFamily: "var(--font-mono)" }}
+              >
+                Top Holdings
+              </div>
+              {holdingsWithValue.filter((h) => !h.isLoan).slice(0, 5).map((h, i) => (
+                <div
+                  key={h.currency}
+                  className="flex items-center justify-between px-4 py-3 border-b last:border-b-0"
+                  style={{ borderColor: "#12110E" }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="text-xs font-bold w-4"
+                      style={{ color: "#3A3020", fontFamily: "var(--font-mono)" }}
+                    >
+                      {i + 1}
+                    </span>
+                    <div
+                      className="w-6 h-6 flex items-center justify-center text-[10px] font-bold"
+                      style={{
+                        background: PALETTE[i % PALETTE.length] + "22",
+                        color: PALETTE[i % PALETTE.length],
+                        border: `1px solid ${PALETTE[i % PALETTE.length]}33`,
+                      }}
+                    >
+                      {h.currency.slice(0, 2)}
                     </div>
-                    <div className="text-right">
-                      <p className={`font-semibold ${h.isLoan ? "text-red-400" : ""}`}>
-                        {loaded ? fmtUsd(Math.abs(h.value)) : "—"}
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-100">{h.currency}</p>
+                      <p className="text-[10px]" style={{ color: "#5A5040", fontFamily: "var(--font-mono)" }}>
+                        {fmtAmount(h.amount)}
                       </p>
-                      {!h.isStable && prices[h.currency] && (
-                        <p className="text-xs">
-                          <Change pct={h.change24h} />
-                        </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p
+                      className="text-sm font-semibold"
+                      style={{ color: "#F5ECD0", fontFamily: "var(--font-mono)" }}
+                    >
+                      {loaded ? fmtUsd(h.value) : "—"}
+                    </p>
+                    {!h.isStable && prices[h.currency] && (
+                      <p
+                        className="text-[10px]"
+                        style={{
+                          color: h.change24h >= 0 ? "#4ADE80" : "#F87171",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {h.change24h >= 0 ? "▲" : "▼"}{Math.abs(h.change24h).toFixed(2)}%
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── HOLDINGS ── */}
+        {activeTab === "holdings" && (
+          <div className="space-y-px" style={{ background: "#1A1510" }}>
+            {holdingsWithValue.map((h, i) => (
+              <div
+                key={h.currency}
+                className="flex items-center justify-between px-4 py-3.5"
+                style={{ background: h.isLoan ? "#130A0A" : "#0A0B0C" }}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-8 h-8 flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{
+                      background: PALETTE[i % PALETTE.length] + "18",
+                      color: PALETTE[i % PALETTE.length],
+                      border: `1px solid ${PALETTE[i % PALETTE.length]}30`,
+                    }}
+                  >
+                    {h.currency.slice(0, 3)}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-zinc-100">{h.currency}</span>
+                      {h.isLoan && (
+                        <span
+                          className="text-[9px] px-1.5 py-0.5 tracking-widest uppercase"
+                          style={{ background: "#3A0A0A", color: "#F87171", border: "1px solid #5A1010" }}
+                        >
+                          Loan
+                        </span>
+                      )}
+                      {h.isStable && !h.isLoan && (
+                        <span
+                          className="text-[9px] px-1.5 py-0.5 tracking-widest uppercase"
+                          style={{ background: "#0A1A12", color: "#4ADE80", border: "1px solid #1A3020" }}
+                        >
+                          Stable
+                        </span>
                       )}
                     </div>
+                    <p
+                      className="text-xs mt-0.5"
+                      style={{ color: "#5A5040", fontFamily: "var(--font-mono)" }}
+                    >
+                      {fmtAmount(Math.abs(h.amount))} · {prices[h.currency] ? fmtUsd(h.price) : "…"}
+                    </p>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+                <div className="text-right">
+                  <p
+                    className="text-sm font-semibold"
+                    style={{
+                      color: h.isLoan ? "#F87171" : "#F5ECD0",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {loaded ? fmtUsd(Math.abs(h.value)) : "—"}
+                  </p>
+                  {!h.isStable && prices[h.currency] && (
+                    <p
+                      className="text-[10px]"
+                      style={{
+                        color: h.change24h >= 0 ? "#4ADE80" : "#F87171",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {h.change24h >= 0 ? "▲" : "▼"}{Math.abs(h.change24h).toFixed(2)}%
+                    </p>
+                  )}
+                </div>
+              </div>
             ))}
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Allocation Chart */}
-          <TabsContent value="chart" className="mt-3">
-            <Card className="bg-gray-900 border-gray-800">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-gray-300">Allocation by Value</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {loaded && pieData.length > 0 ? (
-                  <>
-                    <ResponsiveContainer width="100%" height={220}>
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={60}
-                          outerRadius={100}
-                          paddingAngle={2}
-                          dataKey="value"
-                        >
-                          {pieData.map((_, index) => (
-                            <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(val) => [fmtUsd(Number(val)), "Value"]}
-                          contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151", borderRadius: "8px" }}
-                          labelStyle={{ color: "#f9fafb" }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="grid grid-cols-2 gap-1 mt-2">
-                      {pieData.map((d, i) => (
-                        <div key={d.name} className="flex items-center gap-2 text-xs">
-                          <div
-                            className="w-2 h-2 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: COLORS[i % COLORS.length] }}
-                          />
-                          <span className="text-gray-300">{d.name}</span>
-                          <span className="text-gray-500 ml-auto">
-                            {((d.value / totalValue) * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <div className="h-40 flex items-center justify-center text-gray-500 text-sm">
-                    Loading prices…
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Interest Tab */}
-          <TabsContent value="interest" className="mt-3 space-y-3">
-            <Card className="bg-gray-900 border-gray-800">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-gray-300">Interest Earned by Asset</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {loaded && interestChartData.length > 0 ? (
+        {/* ── ALLOCATION ── */}
+        {activeTab === "allocation" && (
+          <div className="space-y-4">
+            <div className="border p-4" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              <p
+                className="text-[10px] tracking-[0.2em] uppercase mb-4"
+                style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+              >
+                Allocation by Value
+              </p>
+              {loaded && pieData.length > 0 ? (
+                <>
                   <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={interestChartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                      <XAxis dataKey="currency" tick={{ fill: "#9ca3af", fontSize: 11 }} />
-                      <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
-                      <Tooltip
-                        formatter={(val) => [fmtUsd(Number(val)), "Interest Value"]}
-                        contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151", borderRadius: "8px" }}
-                        labelStyle={{ color: "#f9fafb" }}
-                      />
-                      <Bar dataKey="usdValue" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                    </BarChart>
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={90}
+                        paddingAngle={2}
+                        dataKey="value"
+                      >
+                        {pieData.map((_, i) => (
+                          <Cell key={i} fill={PALETTE[i % PALETTE.length]} stroke="transparent" />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<PriceTooltip />} />
+                    </PieChart>
                   </ResponsiveContainer>
-                ) : (
-                  <div className="h-40 flex items-center justify-center text-gray-500 text-sm">
-                    Loading…
+                  <div className="grid grid-cols-2 gap-y-2 gap-x-4 mt-3">
+                    {pieData.map((d, i) => (
+                      <div key={d.name} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-2 h-2 flex-shrink-0"
+                            style={{ background: PALETTE[i % PALETTE.length] }}
+                          />
+                          <span className="text-xs text-zinc-300">{d.name}</span>
+                        </div>
+                        <span
+                          className="text-xs"
+                          style={{ color: "#8A7040", fontFamily: "var(--font-mono)" }}
+                        >
+                          {((d.value / totalValue) * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </CardContent>
-            </Card>
+                </>
+              ) : (
+                <div
+                  className="h-40 flex items-center justify-center text-xs tracking-widest uppercase"
+                  style={{ color: "#3A3020", fontFamily: "var(--font-mono)" }}
+                >
+                  Loading prices…
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-            <Card className="bg-gray-900 border-gray-800">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-gray-300">Interest Detail</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {Object.entries(interestEarned)
-                  .filter(([, amt]) => amt > 0)
-                  .sort(([ac, aa], [bc, ba]) => (ba * (prices[bc]?.usd ?? 0)) - (aa * (prices[ac]?.usd ?? 0)))
-                  .map(([currency, amount]) => (
-                    <div key={currency} className="flex items-center justify-between text-sm">
-                      <span className="font-medium">{currency}</span>
-                      <div className="text-right">
-                        <p className="text-gray-200">{fmtAmount(amount)} {currency}</p>
-                        <p className="text-xs text-emerald-400">
-                          {prices[currency] ? fmtUsd(amount * prices[currency].usd) : "—"}
+        {/* ── YIELD ── */}
+        {activeTab === "interest" && (
+          <div className="space-y-4">
+            <div className="border p-4" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              <p
+                className="text-[10px] tracking-[0.2em] uppercase mb-1"
+                style={{ color: "#6A5830", fontFamily: "var(--font-mono)" }}
+              >
+                Total Yield Earned
+              </p>
+              <p
+                className="text-2xl font-bold mb-4"
+                style={{ color: "#4ADE80", fontFamily: "var(--font-mono)" }}
+              >
+                {loaded ? fmtUsd(totalInterestUsd) : "—"}
+              </p>
+              {loaded && interestChartData.length > 0 && (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={interestChartData} margin={{ top: 0, right: 0, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1A1510" vertical={false} />
+                    <XAxis
+                      dataKey="currency"
+                      tick={{ fill: "#5A5040", fontSize: 9, fontFamily: "var(--font-mono)" }}
+                      tickLine={false}
+                      axisLine={{ stroke: "#1A1510" }}
+                    />
+                    <YAxis
+                      tick={{ fill: "#5A5040", fontSize: 9, fontFamily: "var(--font-mono)" }}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v) => fmtUsd(v, true)}
+                    />
+                    <Tooltip content={<PriceTooltip />} />
+                    <Bar dataKey="usdValue" fill="#4ADE80" radius={[2, 2, 0, 0]} opacity={0.8} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <div className="border" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              <div
+                className="px-4 py-2 border-b text-[10px] tracking-[0.2em] uppercase"
+                style={{ borderColor: "#1E1A12", color: "#6A5830", fontFamily: "var(--font-mono)" }}
+              >
+                By Asset
+              </div>
+              {Object.entries(interestEarned)
+                .filter(([, amt]) => amt > 0)
+                .sort(([ac, aa], [bc, ba]) => (ba * (prices[bc]?.usd ?? 0)) - (aa * (prices[ac]?.usd ?? 0)))
+                .map(([currency, amount]) => (
+                  <div
+                    key={currency}
+                    className="flex items-center justify-between px-4 py-3 border-b last:border-b-0"
+                    style={{ borderColor: "#12110E" }}
+                  >
+                    <span className="text-sm font-semibold text-zinc-200">{currency}</span>
+                    <div className="text-right">
+                      <p
+                        className="text-sm"
+                        style={{ color: "#A09070", fontFamily: "var(--font-mono)" }}
+                      >
+                        {fmtAmount(amount)}
+                      </p>
+                      <p
+                        className="text-xs"
+                        style={{ color: "#4ADE80", fontFamily: "var(--font-mono)" }}
+                      >
+                        {prices[currency] ? fmtUsd(amount * prices[currency].usd) : "—"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── HISTORY ── */}
+        {activeTab === "history" && (
+          <div>
+            <div className="border" style={{ borderColor: "#1E1A12", background: "#0A0B0C" }}>
+              {pageTx.map((tx, i) => (
+                <div
+                  key={tx.id}
+                  className="flex items-start gap-3 px-4 py-3 border-b last:border-b-0"
+                  style={{ borderColor: "#12110E" }}
+                >
+                  <TypeDot type={tx.type} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p
+                          className="text-[10px] tracking-widest uppercase mb-0.5"
+                          style={{ color: "#5A5040", fontFamily: "var(--font-mono)" }}
+                        >
+                          {tx.type}
+                        </p>
+                        <p className="text-sm text-zinc-200 font-medium truncate">
+                          {tx.inputAmount < 0 ? (
+                            <>
+                              <span style={{ color: "#F87171" }}>−{fmtAmount(Math.abs(tx.inputAmount))} {tx.inputCurrency}</span>
+                              {tx.outputCurrency !== tx.inputCurrency && (
+                                <span style={{ color: "#5A5040" }}> → <span style={{ color: "#4ADE80" }}>{fmtAmount(tx.outputAmount)} {tx.outputCurrency}</span></span>
+                              )}
+                            </>
+                          ) : (
+                            <span style={{ color: "#4ADE80" }}>+{fmtAmount(tx.outputAmount)} {tx.outputCurrency}</span>
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p
+                          className="text-sm font-medium"
+                          style={{ color: "#F0A500", fontFamily: "var(--font-mono)" }}
+                        >
+                          {fmtUsd(tx.usdEquivalent)}
+                        </p>
+                        <p
+                          className="text-[10px]"
+                          style={{ color: "#3A3020", fontFamily: "var(--font-mono)" }}
+                        >
+                          {tx.date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}
                         </p>
                       </div>
                     </div>
-                  ))}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Transaction History */}
-          <TabsContent value="history" className="mt-3 space-y-2">
-            {pageTx.map((tx) => (
-              <Card key={tx.id} className="bg-gray-900 border-gray-800">
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge
-                          variant="outline"
-                          className="text-xs border-gray-700 text-gray-300 whitespace-nowrap"
-                        >
-                          {tx.type}
-                        </Badge>
-                        <span className="text-xs text-gray-400">
-                          {tx.date.toLocaleDateString("en-GB", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })}
-                        </span>
-                      </div>
-                      <p className="text-sm mt-1 text-gray-200">
-                        {tx.inputAmount < 0 ? (
-                          <span>
-                            <span className="text-red-400">{fmtAmount(Math.abs(tx.inputAmount))} {tx.inputCurrency}</span>
-                            {tx.outputCurrency !== tx.inputCurrency && (
-                              <span className="text-gray-400"> → <span className="text-emerald-400">{fmtAmount(tx.outputAmount)} {tx.outputCurrency}</span></span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-emerald-400">
-                            +{fmtAmount(tx.outputAmount)} {tx.outputCurrency}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-medium text-gray-200">{fmtUsd(tx.usdEquivalent)}</p>
-                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
+                </div>
+              ))}
+            </div>
 
             {/* Pagination */}
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex items-center justify-between mt-4 px-1">
               <button
                 onClick={() => setTxPage((p) => Math.max(0, p - 1))}
                 disabled={txPage === 0}
-                className="text-sm text-indigo-400 disabled:text-gray-700 hover:text-indigo-300 transition-colors"
+                className="text-xs tracking-widest uppercase transition-colors disabled:opacity-20"
+                style={{ color: "#8A7040", fontFamily: "var(--font-mono)" }}
               >
                 ← Prev
               </button>
-              <span className="text-xs text-gray-500">
-                {txPage + 1} / {totalPages}
+              <span
+                className="text-xs"
+                style={{ color: "#3A3020", fontFamily: "var(--font-mono)" }}
+              >
+                {txPage + 1} / {totalPages} · {transactions.length} txns
               </span>
               <button
                 onClick={() => setTxPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={txPage === totalPages - 1}
-                className="text-sm text-indigo-400 disabled:text-gray-700 hover:text-indigo-300 transition-colors"
+                className="text-xs tracking-widest uppercase transition-colors disabled:opacity-20"
+                style={{ color: "#8A7040", fontFamily: "var(--font-mono)" }}
               >
                 Next →
               </button>
             </div>
-          </TabsContent>
-        </Tabs>
+          </div>
+        )}
       </div>
     </div>
   );
