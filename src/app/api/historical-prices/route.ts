@@ -9,6 +9,11 @@ import {
   priceNearDate,
   PENSION_TICKER,
 } from "@/lib/parse-pension";
+import {
+  fetchHistoricalMarketUsdPrices,
+  MARKET_SYMBOLS,
+  priceNearMarketDate,
+} from "@/lib/yahoo-market";
 
 export const revalidate = 3600;
 
@@ -59,12 +64,13 @@ export async function GET() {
 
   const snapshots = computeDailySnapshots(transactions);
 
-  // Collect symbols — split pension from crypto
+  // Collect symbols — split pension, market tickers, and crypto
   const allSymbols = [
     ...new Set(snapshots.flatMap((s) => Object.keys(s.balances))),
   ].filter((sym) => !HIDDEN.has(sym) && STABLE_USD[sym] === undefined);
 
-  const cryptoSymbols = allSymbols.filter((s) => s !== PENSION_TICKER);
+  const marketSymbols = allSymbols.filter((s) => MARKET_SYMBOLS[s]);
+  const cryptoSymbols = allSymbols.filter((s) => s !== PENSION_TICKER && !MARKET_SYMBOLS[s]);
   const hasPension = allSymbols.includes(PENSION_TICKER);
 
   // Fetch crypto prices from CryptoCompare (sequential to avoid rate limiting)
@@ -72,6 +78,11 @@ export async function GET() {
   for (const sym of cryptoSymbols) {
     prices[sym] = await fetchCryptoDailyPrices(sym);
     await new Promise((r) => setTimeout(r, 200));
+  }
+
+  if (marketSymbols.length > 0) {
+    const marketPrices = await fetchHistoricalMarketUsdPrices(marketSymbols);
+    Object.assign(prices, marketPrices);
   }
 
   // Fetch pension fund NAV from Morningstar if needed, convert to USD
@@ -110,6 +121,8 @@ export async function GET() {
       if (sym === PENSION_TICKER) {
         // Use Morningstar carry-forward logic (walks back for non-trading days)
         price = priceNearDate(prices[sym] ?? {}, snap.dateStr) || latestPrice[sym] || 0;
+      } else if (MARKET_SYMBOLS[sym]) {
+        price = priceNearMarketDate(prices[sym] ?? {}, snap.dateStr) || latestPrice[sym] || 0;
       } else {
         price = STABLE_USD[sym] ?? prices[sym]?.[snap.dateStr] ?? latestPrice[sym] ?? 0;
       }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { fetchPensionFundPrice } from "@/lib/pension-price";
 import { PENSION_TICKER } from "@/lib/parse-pension";
+import { fetchLiveMarketUsdPrices, MARKET_SYMBOLS } from "@/lib/yahoo-market";
 
 // CoinGecko free API IDs for each currency
 const COINGECKO_IDS: Record<string, string> = {
@@ -68,6 +69,12 @@ export async function GET(request: Request) {
     } catch {
       // Return what we have
     }
+  }
+
+  const marketTickers = currencies.filter((c) => MARKET_SYMBOLS[c]);
+  if (marketTickers.length > 0) {
+    const marketPrices = await fetchLiveMarketUsdPrices(marketTickers);
+    Object.assign(prices, marketPrices);
   }
 
   // Fetch pension fund price if JPMNR is requested
