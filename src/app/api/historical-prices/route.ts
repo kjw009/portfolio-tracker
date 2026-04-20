@@ -1,13 +1,21 @@
 import { NextResponse } from "next/server";
-import { parseTransactions, computeDailySnapshots } from "@/lib/parse-transactions";
+import {
+  parseTransactions,
+  computeDailySnapshots,
+  dbRowToTransaction,
+} from "@/lib/parse-transactions";
+import {
+  fetchMorningstarPrices,
+  priceNearDate,
+  PENSION_TICKER,
+} from "@/lib/parse-pension";
 
 export const revalidate = 3600;
 
 const HIDDEN = new Set(["xUSD", "USDX", "USD", "GBP", "GBPX"]);
 const STABLE_USD: Record<string, number> = { USDT: 1, USDC: 1 };
 
-async function fetchDailyPrices(fsym: string): Promise<Record<string, number>> {
-  // "YYYY-MM-DD" → close price
+async function fetchCryptoDailyPrices(fsym: string): Promise<Record<string, number>> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 1000));
     try {
@@ -21,9 +29,7 @@ async function fetchDailyPrices(fsym: string): Promise<Record<string, number>> {
       const days: { time: number; close: number }[] = json?.Data?.Data ?? [];
       const out: Record<string, number> = {};
       for (const { time, close } of days) {
-        const d = new Date(time * 1000);
-        // Use UTC date string — close enough for daily granularity
-        out[d.toISOString().slice(0, 10)] = close;
+        out[new Date(time * 1000).toISOString().slice(0, 10)] = close;
       }
       return out;
     } catch {
@@ -34,37 +40,79 @@ async function fetchDailyPrices(fsym: string): Promise<Record<string, number>> {
 }
 
 export async function GET() {
-  const transactions = parseTransactions();
+  // Use DB transactions when available (includes pension + any manual entries),
+  // otherwise fall back to the Nexo CSV.
+  let transactions;
+  if (process.env.DATABASE_URL) {
+    try {
+      const { getDb } = await import("@/lib/db");
+      const { transactions: txTable } = await import("@/lib/db/schema");
+      const { asc } = await import("drizzle-orm");
+      const db = getDb();
+      const rows = await db.select().from(txTable).orderBy(asc(txTable.date));
+      if (rows.length > 0) transactions = rows.map(dbRowToTransaction);
+    } catch {
+      // fall through
+    }
+  }
+  if (!transactions) transactions = parseTransactions();
+
   const snapshots = computeDailySnapshots(transactions);
 
-  // Collect all symbols that appear in any snapshot
-  const symbols = [
+  // Collect symbols — split pension from crypto
+  const allSymbols = [
     ...new Set(snapshots.flatMap((s) => Object.keys(s.balances))),
   ].filter((sym) => !HIDDEN.has(sym) && STABLE_USD[sym] === undefined);
 
-  // Fetch daily prices sequentially to avoid rate limiting
+  const cryptoSymbols = allSymbols.filter((s) => s !== PENSION_TICKER);
+  const hasPension = allSymbols.includes(PENSION_TICKER);
+
+  // Fetch crypto prices from CryptoCompare (sequential to avoid rate limiting)
   const prices: Record<string, Record<string, number>> = {};
-  for (const sym of symbols) {
-    prices[sym] = await fetchDailyPrices(sym);
+  for (const sym of cryptoSymbols) {
+    prices[sym] = await fetchCryptoDailyPrices(sym);
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  // Precompute the most recent available price for each symbol.
-  // CryptoCompare only has data up to the previous UTC close, so today's
-  // snapshot would get price=0 without this carry-forward.
+  // Fetch pension fund NAV from Morningstar if needed, convert to USD
+  if (hasPension) {
+    const firstSnap = snapshots.find((s) => (s.balances[PENSION_TICKER] ?? 0) > 0);
+    const startDate = firstSnap?.dateStr ?? snapshots[0]?.dateStr ?? "2022-01-01";
+    const endDate = new Date().toISOString().slice(0, 10);
+
+    const [navMap, fxRes] = await Promise.all([
+      fetchMorningstarPrices(startDate, endDate),
+      fetch("https://api.exchangerate-api.com/v4/latest/GBP"),
+    ]);
+    const gbpUsd: number = fxRes.ok ? ((await fxRes.json()).rates?.USD ?? 1.3) : 1.3;
+
+    // Convert GBP NAV → USD price map
+    const pensionUSD: Record<string, number> = {};
+    for (const [date, nav] of Object.entries(navMap)) {
+      pensionUSD[date] = nav * gbpUsd;
+    }
+    prices[PENSION_TICKER] = pensionUSD;
+  }
+
+  // Carry-forward: use most recent known price for any day without data
   const latestPrice: Record<string, number> = {};
   for (const [sym, priceMap] of Object.entries(prices)) {
     const sorted = Object.keys(priceMap).sort();
     if (sorted.length > 0) latestPrice[sym] = priceMap[sorted[sorted.length - 1]];
   }
 
-  // Build timeline — one point per day
+  // For pension, also use priceNearDate (handles weekends/holidays)
   const timeline = snapshots.map((snap) => {
     let portfolioValue = 0;
     for (const [sym, amount] of Object.entries(snap.balances)) {
       if (HIDDEN.has(sym) || amount <= 0.000001) continue;
-      // Use exact date price → fall back to most recent known price
-      const price = STABLE_USD[sym] ?? prices[sym]?.[snap.dateStr] ?? latestPrice[sym] ?? 0;
+      let price: number;
+      if (sym === PENSION_TICKER) {
+        // Use Morningstar carry-forward logic (walks back for non-trading days)
+        price = priceNearDate(prices[sym] ?? {}, snap.dateStr) || latestPrice[sym] || 0;
+      } else {
+        price = STABLE_USD[sym] ?? prices[sym]?.[snap.dateStr] ?? latestPrice[sym] ?? 0;
+      }
       portfolioValue += amount * price;
     }
     return {

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { fetchPensionFundPrice } from "@/lib/pension-price";
+import { PENSION_TICKER } from "@/lib/parse-pension";
 
 // CoinGecko free API IDs for each currency
 const COINGECKO_IDS: Record<string, string> = {
@@ -65,6 +67,14 @@ export async function GET(request: Request) {
       }
     } catch {
       // Return what we have
+    }
+  }
+
+  // Fetch pension fund price if JPMNR is requested
+  if (currencies.includes(PENSION_TICKER)) {
+    const fund = await fetchPensionFundPrice();
+    if (fund) {
+      prices[PENSION_TICKER] = { usd: fund.usd, usd_24h_change: fund.usd_24h_change };
     }
   }
 
