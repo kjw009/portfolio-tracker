@@ -49,12 +49,22 @@ export async function GET() {
     await new Promise((r) => setTimeout(r, 200));
   }
 
+  // Precompute the most recent available price for each symbol.
+  // CryptoCompare only has data up to the previous UTC close, so today's
+  // snapshot would get price=0 without this carry-forward.
+  const latestPrice: Record<string, number> = {};
+  for (const [sym, priceMap] of Object.entries(prices)) {
+    const sorted = Object.keys(priceMap).sort();
+    if (sorted.length > 0) latestPrice[sym] = priceMap[sorted[sorted.length - 1]];
+  }
+
   // Build timeline — one point per day
   const timeline = snapshots.map((snap) => {
     let portfolioValue = 0;
     for (const [sym, amount] of Object.entries(snap.balances)) {
       if (HIDDEN.has(sym) || amount <= 0.000001) continue;
-      const price = STABLE_USD[sym] ?? prices[sym]?.[snap.dateStr] ?? 0;
+      // Use exact date price → fall back to most recent known price
+      const price = STABLE_USD[sym] ?? prices[sym]?.[snap.dateStr] ?? latestPrice[sym] ?? 0;
       portfolioValue += amount * price;
     }
     return {

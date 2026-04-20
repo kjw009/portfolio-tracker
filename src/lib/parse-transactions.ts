@@ -231,6 +231,18 @@ export interface DailySnapshot {
 const DEPOSIT_TYPES_SET = new Set(["Top up Crypto", "Deposit To Exchange", "Credit Card Withdrawal Credit", "Buy"]);
 const WITHDRAWAL_TYPES_SET = new Set(["Withdrawal", "Nexo Card Purchase", "Administrative Deduction", "Sell"]);
 
+// Returns true for transactions funded by a loan or Nexo credit — excluded from cost basis
+function isLoanOrCreditFunded(tx: Transaction): boolean {
+  if (tx.type === "Loan Withdrawal") return true;
+  if (tx.type === "Exchange Booster") return true;
+  if (
+    tx.type === "Top up Crypto" &&
+    (tx.details.includes("Credit Granting Top Up") ||
+      tx.details.includes("Nexo Booster Credit Top Up"))
+  ) return true;
+  return false;
+}
+
 function dateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -258,8 +270,10 @@ export function computeDailySnapshots(transactions: Transaction[]): DailySnapsho
     const key = dateStr(cur);
     for (const tx of byDate[key] ?? []) {
       applyTransaction(tx, balances);
-      if (DEPOSIT_TYPES_SET.has(tx.type)) netInvested += tx.usdEquivalent;
-      else if (WITHDRAWAL_TYPES_SET.has(tx.type)) netInvested -= tx.usdEquivalent;
+      if (!isLoanOrCreditFunded(tx)) {
+        if (DEPOSIT_TYPES_SET.has(tx.type)) netInvested += tx.usdEquivalent;
+        else if (WITHDRAWAL_TYPES_SET.has(tx.type)) netInvested -= tx.usdEquivalent;
+      }
     }
     snapshots.push({
       dateStr: key,

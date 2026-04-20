@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
   Area,
+  AreaChart,
   Line,
   PieChart,
   Pie,
@@ -15,7 +16,6 @@ import {
   CartesianGrid,
   BarChart,
   Bar,
-  ComposedChart,
 } from "recharts";
 import type { Holding, Transaction } from "@/lib/parse-transactions";
 
@@ -38,6 +38,7 @@ interface Props {
   transactions: Transaction[];
   interestEarned: Record<string, number>;
   dbAvailable: boolean;
+  dbEmpty: boolean;
 }
 
 // Refined palette — jewel tones with amber lead
@@ -157,7 +158,7 @@ function BarTooltip({ active, payload }: { active?: boolean; payload?: Array<{ v
 
 type TabId = "overview" | "holdings" | "allocation" | "interest" | "history";
 
-export default function PortfolioDashboard({ holdings, transactions, interestEarned, dbAvailable }: Props) {
+export default function PortfolioDashboard({ holdings, transactions, interestEarned, dbAvailable, dbEmpty }: Props) {
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -478,7 +479,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height={260}>
-                      <ComposedChart data={filteredTimeline} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                      <AreaChart data={filteredTimeline} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                         <defs>
                           <linearGradient id="gradPortfolio" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#F0A500" stopOpacity={0.3} />
@@ -518,7 +519,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                           strokeDasharray="4 3"
                           dot={false}
                         />
-                      </ComposedChart>
+                      </AreaChart>
                     </ResponsiveContainer>
                   )}
                 </div>
@@ -887,8 +888,8 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
         )}
       </div>
 
-      {/* Seed banner — shown when DB is available but has no data from the CSV yet */}
-      {dbAvailable && transactions.length === 0 && !seeding && (
+      {/* Seed banner — shown when DB is reachable but not yet seeded */}
+      {dbEmpty && !seeding && (
         <div
           className="fixed bottom-0 inset-x-0 z-40 flex items-center justify-between px-5 py-3"
           style={{ background: C.amber, fontFamily: "var(--font-mono)" }}

@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   let transactions;
   let dbAvailable = false;
+  let dbEmpty = false;
 
   if (process.env.DATABASE_URL) {
     try {
@@ -20,13 +21,18 @@ export default async function Home() {
 
       const db = getDb();
       const rows = await db.select().from(txTable).orderBy(asc(txTable.date));
-      transactions = rows.map(dbRowToTransaction);
       dbAvailable = true;
+      if (rows.length > 0) {
+        transactions = rows.map(dbRowToTransaction);
+      } else {
+        dbEmpty = true; // DB is reachable but not seeded yet
+      }
     } catch {
       // DB not yet set up or unreachable — fall back to CSV
     }
   }
 
+  // Fall back to CSV if DB not configured, empty, or errored
   if (!transactions) {
     transactions = parseTransactions();
   }
@@ -40,6 +46,7 @@ export default async function Home() {
       transactions={transactions}
       interestEarned={interestEarned}
       dbAvailable={dbAvailable}
+      dbEmpty={dbEmpty}
     />
   );
 }
