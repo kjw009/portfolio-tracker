@@ -15,6 +15,8 @@ const COINGECKO_IDS: Record<string, string> = {
   FLR: "flare-networks",
   SOL: "solana",
   MATIC: "matic-network",
+  RENDER: "render-token",
+  RNDR: "render-token",
 };
 
 // Fixed-price assets (stablecoins / fiat)

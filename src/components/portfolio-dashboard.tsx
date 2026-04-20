@@ -199,8 +199,15 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
       change24h: prices[h.currency]?.usd_24h_change ?? 0,
       value: h.amount * (prices[h.currency]?.usd ?? 0),
     }))
-    .filter((h) => Math.abs(h.value) >= 0.5 && !h.isLoan)
-    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    .filter((h) => !h.isLoan && (
+      h.price > 0 ? Math.abs(h.value) >= 0.5 : Math.abs(h.amount) > 0.000001
+    ))
+    .sort((a, b) => {
+      // Unknown-price holdings sink to the bottom
+      if (a.price === 0 && b.price > 0) return 1;
+      if (a.price > 0 && b.price === 0) return -1;
+      return Math.abs(b.value) - Math.abs(a.value);
+    });
 
   const totalValue = holdingsWithValue.reduce((s, h) => s + h.value, 0);
 
