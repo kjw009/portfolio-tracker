@@ -45,3 +45,6 @@ AGENTS.md
 .claude
 skills-lock.json
 .agents
+
+/data
+src/data/D4275432000-plan-statement.numbers
