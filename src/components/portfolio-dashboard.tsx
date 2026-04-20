@@ -18,6 +18,7 @@ import {
   Bar,
 } from "recharts";
 import type { Holding, Transaction } from "@/lib/parse-transactions";
+import { getSectorSourceNotes, getSectorWeightsForSymbol } from "@/lib/sector-exposure";
 
 const AddTransactionModal = dynamic(() => import("./add-transaction-modal"), { ssr: false });
 
@@ -156,7 +157,7 @@ function BarTooltip({ active, payload }: { active?: boolean; payload?: Array<{ v
   );
 }
 
-type TabId = "overview" | "holdings" | "allocation" | "interest" | "history";
+type TabId = "overview" | "holdings" | "allocation" | "sectors" | "interest" | "history";
 
 export default function PortfolioDashboard({ holdings, transactions, interestEarned, dbAvailable, dbEmpty }: Props) {
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
@@ -226,6 +227,23 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
     .slice(0, 8)
     .map((h) => ({ name: h.currency, value: h.value }));
 
+  const sectorTotals = holdingsWithValue.reduce<Record<string, number>>((acc, holding) => {
+    if (holding.value <= 0) return acc;
+    const weights = getSectorWeightsForSymbol(holding.currency);
+    for (const [sector, pct] of Object.entries(weights)) {
+      acc[sector] = (acc[sector] ?? 0) + (holding.value * pct) / 100;
+    }
+    return acc;
+  }, {});
+
+  const sectorData = Object.entries(sectorTotals)
+    .map(([name, value]) => ({ name, value }))
+    .filter((slice) => slice.value > 1)
+    .sort((a, b) => b.value - a.value);
+
+  const sectorPieData = sectorData.slice(0, 10);
+  const sectorSourceNotes = getSectorSourceNotes(holdingsWithValue.map((h) => h.currency));
+
   const interestChartData = Object.entries(interestEarned)
     .map(([cur, amt]) => ({ currency: cur, usdValue: amt * (prices[cur]?.usd ?? 0) }))
     .filter((d) => d.usdValue > 0.01)
@@ -240,6 +258,7 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
     { id: "overview", label: "Overview" },
     { id: "holdings", label: "Holdings" },
     { id: "allocation", label: "Alloc" },
+    { id: "sectors", label: "Sectors" },
     { id: "interest", label: "Yield" },
     { id: "history", label: "History" },
   ];
@@ -739,6 +758,113 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
                     style={{ color: C.textMuted, fontFamily: "var(--font-mono)" }}
                   >
                     Loading prices…
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── SECTORS ── */}
+        {activeTab === "sectors" && (
+          <div className="space-y-4">
+            <div style={{ background: C.surfaceAlt, border: `1px solid ${C.border}` }}>
+              <div className="px-4 py-3 border-b" style={{ borderColor: C.borderDim }}>
+                <Label>Look-Through Sector Exposure</Label>
+              </div>
+              <div className="p-4">
+                {loaded && sectorPieData.length > 0 ? (
+                  <>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <PieChart>
+                        <Pie
+                          data={sectorPieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={52}
+                          outerRadius={92}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {sectorPieData.map((_, i) => (
+                            <Cell key={i} fill={PALETTE[i % PALETTE.length]} stroke="transparent" />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<BarTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+
+                    <div className="space-y-px mt-4" style={{ background: C.borderDim }}>
+                      {sectorData.map((slice, i) => (
+                        <div
+                          key={slice.name}
+                          className="flex items-center justify-between px-3 py-2.5"
+                          style={{ background: C.surface }}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="w-2.5 h-2.5 flex-shrink-0"
+                              style={{ background: PALETTE[i % PALETTE.length] }}
+                            />
+                            <span className="text-xs truncate" style={{ color: C.textPrimary }}>
+                              {slice.name}
+                            </span>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p
+                              className="text-xs"
+                              style={{ color: C.textPrimary, fontFamily: "var(--font-mono)" }}
+                            >
+                              {fmtUsd(slice.value)}
+                            </p>
+                            <p
+                              className="text-[10px]"
+                              style={{ color: C.textSecondary, fontFamily: "var(--font-mono)" }}
+                            >
+                              {totalValue > 0 ? ((slice.value / totalValue) * 100).toFixed(1) : "0.0"}%
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div
+                    className="h-40 flex items-center justify-center text-xs tracking-widest uppercase"
+                    style={{ color: C.textMuted, fontFamily: "var(--font-mono)" }}
+                  >
+                    Loading sector exposure…
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ background: C.surfaceAlt, border: `1px solid ${C.border}` }}>
+              <div className="px-4 py-2.5 border-b" style={{ borderColor: C.borderDim }}>
+                <Label>Method</Label>
+              </div>
+              <div className="px-4 py-3 space-y-3">
+                <p className="text-xs leading-5" style={{ color: C.textSecondary }}>
+                  ETF, fund, and pension positions are split across their reported underlying sectors. Direct crypto holdings are grouped under
+                  {" "}
+                  <span style={{ color: C.textPrimary }}>Digital Assets</span>
+                  {" "}
+                  and stable-value cash proxies under
+                  {" "}
+                  <span style={{ color: C.textPrimary }}>Cash & Stablecoins</span>
+                  .
+                </p>
+                {sectorSourceNotes.length > 0 && (
+                  <div className="space-y-2">
+                    {sectorSourceNotes.map((note) => (
+                      <p
+                        key={note.ticker}
+                        className="text-[10px] leading-4"
+                        style={{ color: C.textMuted, fontFamily: "var(--font-mono)" }}
+                      >
+                        {note.ticker}: {note.sourceLabel} · as of {note.asOf}
+                      </p>
+                    ))}
                   </div>
                 )}
               </div>
