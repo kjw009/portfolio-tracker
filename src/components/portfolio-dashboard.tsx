@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import {
   Area,
   Line,
@@ -18,6 +19,8 @@ import {
 } from "recharts";
 import type { Holding, Transaction } from "@/lib/parse-transactions";
 
+const AddTransactionModal = dynamic(() => import("./add-transaction-modal"), { ssr: false });
+
 interface PriceData {
   usd: number;
   usd_24h_change: number;
@@ -34,6 +37,7 @@ interface Props {
   holdings: Holding[];
   transactions: Transaction[];
   interestEarned: Record<string, number>;
+  dbAvailable: boolean;
 }
 
 // Refined palette — jewel tones with amber lead
@@ -153,13 +157,16 @@ function BarTooltip({ active, payload }: { active?: boolean; payload?: Array<{ v
 
 type TabId = "overview" | "holdings" | "allocation" | "interest" | "history";
 
-export default function PortfolioDashboard({ holdings, transactions, interestEarned }: Props) {
+export default function PortfolioDashboard({ holdings, transactions, interestEarned, dbAvailable }: Props) {
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [txPage, setTxPage] = useState(0);
   const [chartTimeframe, setChartTimeframe] = useState<string>("MAX");
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [showModal, setShowModal] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState<string | null>(null);
   const TX_PAGE_SIZE = 25;
 
   const fetchPrices = useCallback(async () => {
@@ -281,15 +288,28 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
               )}
             </div>
           </div>
-          <button
-            onClick={fetchPrices}
-            className="text-xs tracking-widest uppercase transition-colors"
-            style={{ color: C.textMuted, fontFamily: "var(--font-mono)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = C.amber)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = C.textMuted)}
-          >
-            ↻ Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchPrices}
+              className="text-xs tracking-widest uppercase transition-colors"
+              style={{ color: C.textMuted, fontFamily: "var(--font-mono)" }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = C.amber)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = C.textMuted)}
+            >
+              ↻
+            </button>
+            <button
+              onClick={() => setShowModal(true)}
+              className="px-3 py-1.5 text-xs tracking-widest uppercase font-semibold transition-colors"
+              style={{
+                fontFamily: "var(--font-mono)",
+                background: C.amber,
+                color: "#000",
+              }}
+            >
+              + Add
+            </button>
+          </div>
         </div>
       </header>
 
@@ -866,6 +886,64 @@ export default function PortfolioDashboard({ holdings, transactions, interestEar
           </div>
         )}
       </div>
+
+      {/* Seed banner — shown when DB is available but has no data from the CSV yet */}
+      {dbAvailable && transactions.length === 0 && !seeding && (
+        <div
+          className="fixed bottom-0 inset-x-0 z-40 flex items-center justify-between px-5 py-3"
+          style={{ background: C.amber, fontFamily: "var(--font-mono)" }}
+        >
+          <p className="text-xs font-semibold text-black">
+            Database connected but empty — import your CSV data?
+          </p>
+          <button
+            onClick={async () => {
+              setSeeding(true);
+              try {
+                const r = await fetch("/api/transactions/seed", { method: "POST" });
+                const j = await r.json();
+                setSeedResult(`Imported ${j.inserted} transactions`);
+                window.location.reload();
+              } catch {
+                setSeedResult("Seed failed");
+                setSeeding(false);
+              }
+            }}
+            className="ml-4 px-3 py-1 text-xs font-bold bg-black text-amber-400 tracking-widest uppercase"
+          >
+            Import CSV →
+          </button>
+        </div>
+      )}
+
+      {/* Seed status */}
+      {(seeding || seedResult) && (
+        <div
+          className="fixed bottom-0 inset-x-0 z-40 flex items-center justify-between px-5 py-3"
+          style={{ background: C.surface, borderTop: `1px solid ${C.border}`, fontFamily: "var(--font-mono)" }}
+        >
+          <p className="text-xs" style={{ color: seeding ? C.textSecondary : C.green }}>
+            {seeding ? "Importing transactions…" : seedResult}
+          </p>
+          {seedResult && (
+            <button
+              onClick={() => setSeedResult(null)}
+              className="text-xs"
+              style={{ color: C.textMuted }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Add Transaction modal */}
+      {showModal && (
+        <AddTransactionModal
+          onClose={() => setShowModal(false)}
+          dbAvailable={dbAvailable}
+        />
+      )}
     </div>
   );
 }

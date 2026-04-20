@@ -20,6 +20,10 @@ export interface Holding {
   isLoan: boolean;
 }
 
+// Transaction types added via the manual form
+export const MANUAL_TX_TYPES = ["Buy", "Sell", "Trade", "Income"] as const;
+export type ManualTxType = typeof MANUAL_TX_TYPES[number];
+
 // Transaction types to completely ignore (internal wallet moves or redundant records)
 const IGNORE_TYPES = new Set([
   "Transfer In",
@@ -138,6 +142,21 @@ function applyTransaction(tx: Transaction, balances: Record<string, number>): vo
       add(tx.inputCurrency, tx.inputAmount);
       add(tx.outputCurrency, tx.outputAmount);
       break;
+
+    // Manual transactions added via the UI
+    case "Buy":
+    case "Income":
+      add(tx.outputCurrency, tx.outputAmount);
+      break;
+
+    case "Sell":
+      add(tx.inputCurrency, tx.inputAmount); // inputAmount is negative
+      break;
+
+    case "Trade":
+      add(tx.inputCurrency, tx.inputAmount);  // negative: asset given away
+      add(tx.outputCurrency, tx.outputAmount); // positive: asset received
+      break;
   }
 }
 
@@ -209,8 +228,8 @@ export interface DailySnapshot {
   netInvested: number; // cumulative deposits − withdrawals in USD
 }
 
-const DEPOSIT_TYPES_SET = new Set(["Top up Crypto", "Deposit To Exchange", "Credit Card Withdrawal Credit"]);
-const WITHDRAWAL_TYPES_SET = new Set(["Withdrawal", "Nexo Card Purchase", "Administrative Deduction"]);
+const DEPOSIT_TYPES_SET = new Set(["Top up Crypto", "Deposit To Exchange", "Credit Card Withdrawal Credit", "Buy"]);
+const WITHDRAWAL_TYPES_SET = new Set(["Withdrawal", "Nexo Card Purchase", "Administrative Deduction", "Sell"]);
 
 function dateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -306,8 +325,33 @@ export function computePortfolioTimeline(transactions: Transaction[]): TimelineP
   return points;
 }
 
+// Converts a DB row (numeric fields come back as strings from Drizzle) to Transaction
+export function dbRowToTransaction(row: {
+  id: string;
+  type: string;
+  inputCurrency: string;
+  inputAmount: string | number;
+  outputCurrency: string;
+  outputAmount: string | number;
+  usdEquivalent: string | number;
+  details: string;
+  date: Date;
+}): Transaction {
+  return {
+    id: row.id,
+    type: row.type,
+    inputCurrency: row.inputCurrency,
+    inputAmount: typeof row.inputAmount === "string" ? parseFloat(row.inputAmount) : row.inputAmount,
+    outputCurrency: row.outputCurrency,
+    outputAmount: typeof row.outputAmount === "string" ? parseFloat(row.outputAmount) : row.outputAmount,
+    usdEquivalent: typeof row.usdEquivalent === "string" ? parseFloat(row.usdEquivalent) : row.usdEquivalent,
+    details: row.details,
+    date: row.date instanceof Date ? row.date : new Date(row.date),
+  };
+}
+
 export function computeInterestEarned(transactions: Transaction[]): Record<string, number> {
-  const interestTypes = new Set(["Interest", "Fixed Term Interest", "Interest Additional"]);
+  const interestTypes = new Set(["Interest", "Fixed Term Interest", "Interest Additional", "Income"]);
   const totals: Record<string, number> = {};
 
   for (const tx of transactions) {
